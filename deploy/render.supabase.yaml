@@ -1,0 +1,26 @@
+# Use for a NEW staging service. Do not re-sync the legacy production Blueprint blindly.
+services:
+  - type: web
+    name: word-garden-api-staging
+    runtime: node
+    branch: codex/account-login-foundation
+    rootDir: backend
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeployTrigger: off
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: DB_SSL
+        value: 'true'
+      - key: AUTO_MIGRATE
+        value: 'false'
+      - key: NODE_VERSION
+        value: '22'

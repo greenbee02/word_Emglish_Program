@@ -21,6 +21,7 @@ test('state API reads and writes application state', async () => {
   let stored = null;
   const handler = createRequestHandler({
     pool: {},
+    authenticate: async () => ({ id: '11111111-1111-4111-8111-111111111111' }),
     getState: async () => stored,
     putState: async (_pool, _workspaceId, state) => {
       stored = { state, version: 1, updatedAt: new Date().toISOString() };
@@ -46,7 +47,7 @@ test('state API reads and writes application state', async () => {
   assert.equal(initial.body.state, null);
 
   const state = emptyState();
-  const saved = await invoke('PUT', '/api/state', { state });
+  const saved = await invoke('PUT', '/api/state', { state, expectedVersion: 0 });
   assert.equal(saved.status, 200);
   assert.equal(saved.body.saved, true);
 

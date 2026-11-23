@@ -1,7 +1,16 @@
-const STORAGE_KEY = 'word-garden-v1';
+import { createSyncStore } from './sync.js';
 const API_BASE_URL = String(import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
-let remoteSaveTimer = null;
-let pendingRemoteState = null;
+let sessionProvider = async () => null;
+const syncStore = createSyncStore({ storage: globalThis.localStorage, apiBase: API_BASE_URL,
+  getSession: () => sessionProvider(), onStatus: (detail) => {
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('word-garden-sync', { detail }));
+  },
+});
+export function configureStore(userId, getSession) { sessionProvider = getSession || (async () => null); syncStore.setUser(userId); }
+export const flushPendingSaves = () => syncStore.flush();
+export const hasUnsavedChanges = () => syncStore.isDirty();
+export const getSyncStatus = () => syncStore.getStatus();
+export const getGuestState = () => ({ ...emptyState(), ...syncStore.guest() });
 
 export const emptyState = () => ({
   words: [],
@@ -11,62 +20,15 @@ export const emptyState = () => ({
 });
 
 export function loadState() {
-  try {
-    return { ...emptyState(), ...JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') };
-  } catch {
-    return emptyState();
-  }
+  return { ...emptyState(), ...syncStore.load() };
 }
 
 export function saveState(state) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  scheduleRemoteSave(state);
+  syncStore.save(state);
 }
 
-async function apiRequest(path, options = {}) {
-  if (!API_BASE_URL) return null;
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `API request failed (${response.status})`);
-  }
-  return response.json();
-}
-
-async function pushRemoteState(state) {
-  return apiRequest('/api/state', {
-    method: 'PUT',
-    body: JSON.stringify({ state }),
-  });
-}
-
-function scheduleRemoteSave(state) {
-  if (!API_BASE_URL) return;
-  pendingRemoteState = structuredClone(state);
-  clearTimeout(remoteSaveTimer);
-  remoteSaveTimer = setTimeout(async () => {
-    const nextState = pendingRemoteState;
-    pendingRemoteState = null;
-    try {
-      await pushRemoteState(nextState);
-    } catch (error) {
-      console.error('서버에 데이터를 저장하지 못했습니다.', error);
-    }
-  }, 350);
-}
-
-export async function syncInitialState(localState) {
-  if (!API_BASE_URL) return localState;
-  const remote = await apiRequest('/api/state');
-  if (remote?.state) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(remote.state));
-    return { ...emptyState(), ...remote.state };
-  }
-  await pushRemoteState(localState);
-  return localState;
+export async function syncInitialState(localState, options) {
+  return { ...emptyState(), ...await syncStore.sync(localState, options) };
 }
 
 export function parseBackup(text) {
