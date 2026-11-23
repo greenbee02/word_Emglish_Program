@@ -1,5 +1,7 @@
 # Vercel Render Supabase 설정 안내
 
+**이미 Vercel·Render·Supabase가 연동되어 있다면 [기존 서비스 업데이트 안내](EXISTING_DEPLOYMENT.md)부터 보세요.** 기존 서비스와 주소를 유지하면서 새 테이블·인증 설정·새 코드를 적용하는 순서를 설명합니다. 아래 문서는 별도의 테스트 환경을 준비하는 경우에 사용합니다.
+
 이 문서는 **Vercel에 화면을 배포하고, Render에 API를 배포하며, Supabase를 DB와 인증으로 사용하는 경우**의 설정 순서입니다. PC에서 개발 서버를 켜는 과정은 필수가 아닙니다.
 
 **Vercel의 `VITE_API_URL`에는 연결할 Render 서비스의 실제 HTTPS 주소를 넣습니다.** 테스트 배포도 실제 테스트 Render 주소를 사용합니다. `localhost`와 `127.0.0.1`은 이 문서의 클라우드 설정값으로 사용하지 않습니다.

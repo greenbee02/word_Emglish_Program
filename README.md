@@ -16,6 +16,8 @@ docs/       백업·인증·테스트·배포 사용자 안내
 
 ## 배포
 
+이미 연동된 Vercel·Render·Supabase를 그대로 업데이트할 때는 [기존 서비스 업데이트 안내](docs/EXISTING_DEPLOYMENT.md)를 따릅니다.
+
 Vercel·Render·Supabase 설정은 [클라우드 설정 안내](docs/USER_SETUP.md)의 서비스별 표를 따릅니다. Vercel의 `VITE_API_URL`은 실제 Render HTTPS 주소입니다. 저장소의 `.env.example`은 PC 실행용이며 클라우드 대시보드에 그대로 복사하지 않습니다.
 
 ### Render
