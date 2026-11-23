@@ -1,20 +1,42 @@
 // Storage and network state live outside the views so account changes can cancel all old work.
 export function createSyncStore({ storage, apiBase = '', getSession = async () => null, fetchImpl = fetch, onStatus = () => {} }) {
-  const guestKey = 'word-garden-v1';
+  const legacyGuestKey = 'word-garden-v1';
+  const guestPrefix = 'word-garden-v2:guest:';
+  const guestSessionKey = 'word-garden-v2:guest-session';
+  const guestImportKey = 'word-garden-v2:guest-import';
+  const read = (name, fallback) => { try { return JSON.parse(storage.getItem(name) || 'null') ?? fallback; } catch { return fallback; } };
+  const savedGuestSession = read(guestSessionKey, 'initial');
+  let guestKey = `${guestPrefix}${typeof savedGuestSession === 'string' && /^[a-zA-Z0-9-]+$/.test(savedGuestSession) ? savedGuestSession : 'initial'}`;
   let userId = null, key = guestKey, generation = 0, controller = new AbortController();
   let timer, pending = null, inFlight = null, version = 0, hydrated = false, blocked = false, revision = 0;
   let status = { kind: 'local', message: '이 기기에 저장됩니다.' };
   const notify = (kind, message) => { status = { kind, message }; onStatus(status); };
-  const read = (name, fallback) => { try { return JSON.parse(storage.getItem(name) || 'null') ?? fallback; } catch { return fallback; } };
+  const hasGuestData = value => ['words', 'imports', 'sessions'].some(field => Array.isArray(value?.[field]) && value[field].length > 0);
   const meta = () => read(`${key}:sync`, { version: 0, dirty: false });
   const writeMeta = (dirty) => storage.setItem(`${key}:sync`, JSON.stringify({ version, dirty }));
 
   function setUser(id) {
+    const nextUserId = id || null;
+    let guestStorageError = false;
+    // Preserve pre-login guest work for explicit import, without opening it on logout.
+    if (!userId && nextUserId && hasGuestData(read(guestKey, {}))) {
+      try { storage.setItem(guestImportKey, JSON.stringify(guestKey)); }
+      catch { guestStorageError = true; }
+    }
+    if (Boolean(userId) !== Boolean(nextUserId)) {
+      // Start the next anonymous workspace at both auth boundaries, including expiry on reload.
+      // Old guest data and account caches remain intact for explicit import/re-login.
+      const session = crypto.randomUUID();
+      guestKey = `${guestPrefix}${session}`;
+      try { storage.setItem(guestSessionKey, JSON.stringify(session)); }
+      catch { guestStorageError = true; }
+    }
     generation++; controller.abort(); controller = new AbortController();
     clearTimeout(timer); pending = null; inFlight = null; revision = 0;
-    userId = id || null; key = userId ? `word-garden-v2:user:${userId}` : guestKey;
+    userId = nextUserId; key = userId ? `word-garden-v2:user:${userId}` : guestKey;
     version = meta().version; hydrated = false; blocked = false;
     notify(userId ? 'loading' : 'local', userId ? '내 데이터를 불러오는 중입니다.' : '이 기기에 저장됩니다. 로그인하면 계정에 저장할 수 있어요.');
+    if (guestStorageError) notify('error', '기기의 게스트 저장 설정을 갱신하지 못했습니다. 저장 공간을 확인해 주세요.');
   }
   function load() { return read(key, {}); }
   async function request(method, body, epoch) {
@@ -115,5 +137,14 @@ export function createSyncStore({ storage, apiBase = '', getSession = async () =
     }
   }
   function isDirty() { return Boolean(userId && (meta().dirty || pending || inFlight)); }
-  return { setUser, load, save, sync, flush, isDirty, getStatus: () => status, guest: () => read(guestKey, {}) };
+  function guest() {
+    const retainedKey = read(guestImportKey, null);
+    const candidates = [guestKey, typeof retainedKey === 'string' && retainedKey.startsWith(guestPrefix) ? retainedKey : null, legacyGuestKey];
+    for (const name of candidates) {
+      const value = name ? read(name, {}) : {};
+      if (hasGuestData(value)) return value;
+    }
+    return {};
+  }
+  return { setUser, load, save, sync, flush, isDirty, getStatus: () => status, guest };
 }
