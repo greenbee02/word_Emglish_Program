@@ -263,8 +263,8 @@ function finishTypingAttempt(word, correct) {
   const copyMode = typingDirection === 'copy-meaning';
   const grade = correct ? 'good' : 'again';
   if (!copyMode) state.words = state.words.map(item => item.id === word.id ? gradeWord(item, grade) : item);
-  sessionResults.push({ id: word.id, grade, correct, accuracy: typingFeedback.accuracy, responseMs: typingFeedback.responseMs, hints: typingFeedback.hints, attempt: attempts });
-  if (!correct && attempts < 3) typingQueue.push(word);
+  sessionResults.push({ id: word.id, grade, correct, accuracy: copyMode && correct ? 100 : typingFeedback.accuracy, responseMs: typingFeedback.responseMs, hints: typingFeedback.hints, attempt: attempts });
+  if (!copyMode && !correct && attempts < 3) typingQueue.push(word);
   persist(); typingIndex += 1; typingAnswered = false; typingFeedback = null; typingHintLevel = 0; typingStartedAt = Date.now(); typing();
 }
 
@@ -277,22 +277,23 @@ function typing() {
   const conciseMeaning = representativeMeaning(word.meaning);
   const expected = spelling ? word.english : copyMode ? word.meaning : conciseMeaning;
   const distanceNote = spelling && typingFeedback && !typingFeedback.correct && typingFeedback.input ? `<p class="spelling-distance">철자 차이: ${typingFeedback.distance}글자</p>` : '';
-  const accuracyNote = copyMode && typingFeedback ? `<p class="copy-accuracy-result">입력 정확도: ${typingFeedback.accuracy}%</p>` : '';
-  const feedback = typingFeedback ? `<div class="typing-feedback ${typingFeedback.correct ? 'correct-box' : 'wrong-box'}"><b>${typingFeedback.correct ? '정확하게 입력했어요!' : '다른 글자가 있어요'}</b><p>입력: ${esc(typingFeedback.input || '(입력 없음)')}</p><p>정답: ${esc(expected)}</p>${distanceNote}${accuracyNote}${typingFeedback.correct || spelling || copyMode ? '' : '<button class="secondary" id="accept-answer">내 답도 정답으로 인정</button>'}<button class="primary" id="typing-next">${typingIndex + 1 === typingQueue.length ? '결과 보기' : '다음 단어'}</button><small>${(typingFeedback.responseMs / 1000).toFixed(1)}초${copyMode ? '' : ` · 힌트 ${typingFeedback.hints}단계 사용`}</small></div>` : '';
+  const accuracyNote = copyMode && typingFeedback ? `<p class="copy-accuracy-result">입력 일치도: ${typingFeedback.accuracy}%</p>` : '';
+  const feedback = typingFeedback ? `<div class="typing-feedback ${typingFeedback.correct ? 'correct-box' : 'wrong-box'}"><b>${typingFeedback.correct ? '정확하게 입력했어요!' : copyMode ? '입력한 뜻을 확인해 보세요' : '다른 글자가 있어요'}</b><p>입력: ${esc(typingFeedback.input || '(입력 없음)')}</p><p>정답: ${esc(expected)}</p>${distanceNote}${accuracyNote}${typingFeedback.correct || spelling ? '' : '<button class="secondary" id="accept-answer">내 답도 정답으로 인정</button>'}<button class="primary" id="typing-next">${typingIndex + 1 === typingQueue.length ? '결과 보기' : '다음 단어'}</button><small>${(typingFeedback.responseMs / 1000).toFixed(1)}초${copyMode ? '' : ` · 힌트 ${typingFeedback.hints}단계 사용`}</small></div>` : '';
   const hintValue = spelling ? englishHint(word.english, typingHintLevel) : meaningHint(conciseMeaning, typingHintLevel);
   const hint = typingHintLevel ? `<p class="hint-output">힌트 ${typingHintLevel}: ${esc(hintValue)}</p>` : '';
   const prompt = spelling ? `<div class="meaning-prompt"><h2>${esc(conciseMeaning)}</h2><p>${esc(word.partOfSpeech)}</p></div>` : copyMode ? `<p>${esc(word.partOfSpeech)}</p><div class="study-word"><h1>${esc(word.english)}</h1><button id="speak-typing" class="speak-button" aria-label="발음 다시 듣기">🔊</button></div><div class="copy-target">${esc(word.meaning)}</div>` : `<p>${esc(word.partOfSpeech)}</p><div class="study-word"><h1>${esc(word.english)}</h1><button id="speak-typing" class="speak-button" aria-label="발음 다시 듣기">🔊</button></div>`;
-  const guide = spelling ? '한글 뜻에 맞는 영어 단어 또는 숙어를 정확히 입력하세요.' : copyMode ? '화면의 한글 뜻을 그대로 따라 입력하세요.' : '기억나는 한글 뜻을 입력하세요. 여러 뜻 중 하나만 맞혀도 됩니다.';
+  const guide = spelling ? '한글 뜻에 맞는 영어 단어 또는 숙어를 정확히 입력하세요.' : copyMode ? '여러 뜻 중 하나만 입력하세요. 띄어쓰기와 기본 어미 차이는 괜찮아요.' : '기억나는 한글 뜻을 입력하세요. 여러 뜻 중 하나만 맞혀도 됩니다.';
   const placeholder = spelling ? '영어 단어 입력' : '한글 뜻 입력';
-  const inputField = copyMode ? `<textarea id="meaning-input" autocomplete="off" spellcheck="false" placeholder="${placeholder}" required></textarea><div class="copy-meter"><i id="copy-meter-bar"></i><span id="copy-meter-text">0 / ${expected.length}자 · 정확도 100%</span></div>` : `<input id="meaning-input" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${placeholder}" required>`;
+  const inputField = copyMode ? `<textarea id="meaning-input" autocomplete="off" spellcheck="false" placeholder="${placeholder}" required></textarea><div class="copy-meter"><i id="copy-meter-bar"></i><span id="copy-meter-text">여러 뜻 중 하나만 입력하면 돼요.</span></div>` : `<input id="meaning-input" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${placeholder}" required>`;
   const tools = copyMode ? '' : `<div class="typing-tools"><button class="secondary" id="typing-hint" ${typingHintLevel >= 3 ? 'disabled' : ''}>힌트 보기</button><button class="text-btn" id="typing-give-up">모르겠어요</button></div>`;
-  shell(`<div class="study-top"><button class="text-btn" data-route="home">← 나가기</button><span>${spelling ? '영단어' : copyMode ? '한글 따라 치기' : '뜻'} ${typingIndex + 1} / ${typingQueue.length}</span></div><div class="study-progress"><i style="width:${(typingIndex / typingQueue.length) * 100}%"></i></div><section class="flashcard typing-card ${copyMode ? 'copy-card' : ''}"><span class="tag">${spelling ? 'TYPE THE ENGLISH WORD' : copyMode ? 'KOREAN TYPING PRACTICE' : 'TYPE THE MEANING'}</span>${prompt}${typingAnswered ? feedback : `<p class="typing-guide">${guide}</p>${copyMode ? '' : hint}<form id="typing-form">${inputField}<button class="primary">입력 확인</button></form>${tools}`}</section>`);
+  shell(`<div class="study-top"><button class="text-btn" data-route="home">← 나가기</button><span>${spelling ? '영단어' : copyMode ? '한글 따라 치기' : '뜻'} ${typingIndex + 1} / ${typingQueue.length}</span></div><div class="study-progress"><i style="width:${(typingIndex / typingQueue.length) * 100}%"></i></div><section class="flashcard typing-card ${copyMode ? 'copy-card' : ''}"><span class="tag">${spelling ? 'TYPE THE ENGLISH WORD' : copyMode ? 'KOREAN TYPING PRACTICE' : 'TYPE THE MEANING'}</span>${prompt}${typingAnswered ? feedback : `<p class="typing-guide">${guide}</p>${copyMode ? '' : hint}<form id="typing-form">${inputField}<button class="primary">${copyMode ? '확인하고 다음 단어' : '입력 확인'}</button></form>${tools}`}</section>`);
   app.querySelector('#speak-typing')?.addEventListener('click', () => pronounce(word.english));
   if (!spelling && spokenStudyWordId !== word.id) { spokenStudyWordId = word.id; pronounce(word.english); }
   const submit = (input) => {
     if (typingAnswered) return;
     const graded = spelling ? gradeEnglishAnswer(input, word.english) : copyMode ? gradeCopyAnswer(input, word.meaning) : gradeMeaningAnswer(input, conciseMeaning);
     typingAnswered = true; typingFeedback = { correct: graded.correct, input, distance: graded.distance, accuracy: graded.accuracy, responseMs: Date.now() - typingStartedAt, hints: typingHintLevel };
+    if (copyMode && graded.correct) { finishTypingAttempt(word, true); return; }
     if (spelling) pronounce(word.english);
     typing();
   };
@@ -302,7 +303,12 @@ function typing() {
   app.querySelector('#accept-answer')?.addEventListener('click', () => finishTypingAttempt(word, true));
   app.querySelector('#typing-next')?.addEventListener('click', () => finishTypingAttempt(word, typingFeedback.correct));
   const typingInput = app.querySelector('#meaning-input');
-  typingInput?.addEventListener('input', () => { if (!copyMode) return; const progress = copyProgress(typingInput.value, word.meaning); app.querySelector('#copy-meter-bar').style.width = `${Math.min(100, progress.typed / Math.max(1, progress.total) * 100)}%`; app.querySelector('#copy-meter-text').textContent = `${progress.typed} / ${progress.total}자 · 정확도 ${progress.accuracy}%`; });
+  typingInput?.addEventListener('input', () => { if (!copyMode) return; const progress = copyProgress(typingInput.value, word.meaning); app.querySelector('#copy-meter-bar').style.width = `${progress.correct ? 100 : Math.min(90, progress.typed / Math.max(1, progress.total) * 100)}%`; app.querySelector('#copy-meter-text').textContent = progress.correct ? '뜻을 확인했어요 · 확인하면 다음 단어로 넘어가요.' : `${progress.typed}자 입력 · 뜻 하나를 입력한 뒤 확인해 주세요.`; });
+  typingInput?.addEventListener('keydown', event => {
+    if (copyMode && event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
+      event.preventDefault(); event.currentTarget.form.requestSubmit();
+    }
+  });
   typingInput?.focus();
 }
 function study() {
@@ -342,7 +348,7 @@ function quiz() {
   });
 }
 function saveSession() { const responseTimes = sessionResults.map(item => item.responseMs).filter(Number.isFinite); const result = { id: crypto.randomUUID(), date: new Date().toISOString(), type: sessionKind, direction: sessionKind === 'typing' ? typingDirection : null, total: sessionResults.length, correct: sessionResults.filter(r => r.correct ?? r.grade === 'good').length, quizTotal: quizQueue.length, quizCorrect, averageResponseMs: responseTimes.length ? Math.round(responseTimes.reduce((sum, value) => sum + value, 0) / responseTimes.length) : null }; state.sessions.push(result); persist(); route = 'result'; render(); }
-function result() { const good = sessionResults.filter(r => r.correct ?? r.grade === 'good').length; const typingTitle = typingDirection === 'spelling' ? '영단어 타이핑 학습을 마쳤어요' : typingDirection === 'copy-meaning' ? '한글 뜻 따라 치기를 마쳤어요' : '뜻 타이핑 학습을 마쳤어요'; const title = sessionKind === 'weak' ? '틀린 단어 복습을 마쳤어요' : sessionKind === 'typing' ? typingTitle : '오늘의 학습을 마쳤어요'; const times = sessionResults.map(item => item.responseMs).filter(Number.isFinite); const average = times.length ? (times.reduce((sum, value) => sum + value, 0) / times.length / 1000).toFixed(1) : null; const accuracies = sessionResults.map(item => item.accuracy).filter(Number.isFinite); const copyAverage = accuracies.length ? Math.round(accuracies.reduce((sum, value) => sum + value, 0) / accuracies.length) : null; shell(`<section class="complete"><span>✓</span><p class="eyebrow">SESSION COMPLETE</p><h1>${title}</h1><p>${sessionResults.length}문제 중 ${good}개를 정확히 입력했습니다.${copyAverage !== null ? `<br>평균 입력 정확도 ${copyAverage}%` : ''}${average ? `<br>평균 응답 시간 ${average}초` : ''}${sessionKind === 'weak' ? `<br>남은 약점 단어 ${weakWordQueue(state).length}개` : ''}${quizQueue.length ? `<br>문장 퀴즈 ${quizQueue.length}개 중 ${quizCorrect}개 정답` : ''}</p><button class="primary" data-route="${sessionKind === 'weak' ? 'stats' : 'home'}">${sessionKind === 'weak' ? '학습 기록 보기' : '오늘로 돌아가기'}</button></section>`); }
+function result() { const good = sessionResults.filter(r => r.correct ?? r.grade === 'good').length; const typingTitle = typingDirection === 'spelling' ? '영단어 타이핑 학습을 마쳤어요' : typingDirection === 'copy-meaning' ? '한글 뜻 따라 치기를 마쳤어요' : '뜻 타이핑 학습을 마쳤어요'; const title = sessionKind === 'weak' ? '틀린 단어 복습을 마쳤어요' : sessionKind === 'typing' ? typingTitle : '오늘의 학습을 마쳤어요'; const times = sessionResults.map(item => item.responseMs).filter(Number.isFinite); const average = times.length ? (times.reduce((sum, value) => sum + value, 0) / times.length / 1000).toFixed(1) : null; const accuracies = sessionResults.map(item => item.accuracy).filter(Number.isFinite); const copyAverage = accuracies.length ? Math.round(accuracies.reduce((sum, value) => sum + value, 0) / accuracies.length) : null; shell(`<section class="complete"><span>✓</span><p class="eyebrow">SESSION COMPLETE</p><h1>${title}</h1><p>${sessionResults.length}문제 중 ${good}개를 정확히 입력했습니다.${copyAverage !== null ? `<br>평균 ${typingDirection === 'copy-meaning' ? '입력 일치도' : '입력 정확도'} ${copyAverage}%` : ''}${average ? `<br>평균 응답 시간 ${average}초` : ''}${sessionKind === 'weak' ? `<br>남은 약점 단어 ${weakWordQueue(state).length}개` : ''}${quizQueue.length ? `<br>문장 퀴즈 ${quizQueue.length}개 중 ${quizCorrect}개 정답` : ''}</p><button class="primary" data-route="${sessionKind === 'weak' ? 'stats' : 'home'}">${sessionKind === 'weak' ? '학습 기록 보기' : '오늘로 돌아가기'}</button></section>`); }
 
 function stats() {
   shell('<div id="progress-root"></div>');

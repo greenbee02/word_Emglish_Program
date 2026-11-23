@@ -23,4 +23,6 @@ input,select,textarea{border-radius:12px;color:#263e4e;max-width:100%}.manual in
 .settings form input,.settings form select{width:100%;min-width:0}
 .settings form>button{min-width:0;max-width:100%;white-space:normal}
 .settings input[type=range]{padding:0;border:0;accent-color:var(--orange)}
+.copy-card .copy-meter{height:auto;min-height:30px;border-radius:8px}
+.copy-card .copy-meter span{padding:5px 10px;line-height:1.6;font-size:12px}
 @media(max-width:800px){.nav-item{font-size:14px;padding:6px 0}.nav-item .nav-label{display:none}.nav-item::after{content:attr(data-short-label);line-height:1.4}}
