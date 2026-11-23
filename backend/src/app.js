@@ -9,12 +9,12 @@ export function parseAllowedOrigins(value = '') {
 function setCors(req, res, allowedOrigins) {
   const origin = req.headers.origin;
   if (!origin) return true;
-  const allowed = allowedOrigins.length === 0 || allowedOrigins.includes(origin);
+  const allowed = allowedOrigins.includes(origin);
   if (!allowed) return false;
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'GET,PUT,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
   return true;
 }
 
@@ -44,7 +44,7 @@ async function readJson(req) {
   }
 }
 
-export function createRequestHandler({ pool, getState, putState, workspaceId = 'default', allowedOrigins = [] }) {
+export function createRequestHandler({ pool, getState, putState, authenticate, allowedOrigins = [] }) {
   return async function handler(req, res) {
     if (!setCors(req, res, allowedOrigins)) return sendJson(res, 403, { error: 'Origin is not allowed' });
     if (req.method === 'OPTIONS') {
@@ -59,19 +59,25 @@ export function createRequestHandler({ pool, getState, putState, workspaceId = '
         return sendJson(res, 200, { status: 'ok' });
       }
       if (req.method === 'GET' && url.pathname === '/api/state') {
-        const stored = await getState(pool, workspaceId);
+        if (!authenticate) return sendJson(res, 503, { error: '인증 설정이 필요합니다.' });
+        const user = await authenticate(req);
+        const stored = await getState(pool, user.id);
         return sendJson(res, 200, stored ?? { state: null, version: 0, updatedAt: null });
       }
       if (req.method === 'PUT' && url.pathname === '/api/state') {
+        if (!authenticate) return sendJson(res, 503, { error: '인증 설정이 필요합니다.' });
+        const user = await authenticate(req);
         const body = await readJson(req);
-        const validation = validateState(body.state);
+        const validation = validateState(body?.state);
         if (!validation.valid) return sendJson(res, 400, { error: validation.message });
-        const saved = await putState(pool, workspaceId, body.state);
+        if (!Number.isSafeInteger(body.expectedVersion) || body.expectedVersion < 0) return sendJson(res, 400, { error: 'expectedVersion must be a nonnegative safe integer' });
+        const saved = await putState(pool, user.id, body.state, body.expectedVersion);
+        if (!saved) return sendJson(res, 409, { error: '다른 기기에서 변경되었습니다. 현재 데이터를 백업한 후 서버 데이터를 다시 불러와 주세요.' });
         return sendJson(res, 200, { saved: true, ...saved });
       }
       return sendJson(res, 404, { error: 'Not found' });
     } catch (error) {
-      console.error(error);
+      if (!error.status) console.error('API request failed:', error.code || error.name);
       return sendJson(res, error.status || 500, { error: error.status ? error.message : 'Internal server error' });
     }
   };

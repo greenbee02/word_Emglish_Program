@@ -1,5 +1,10 @@
 import './style.css';
-import { loadState, saveState, syncInitialState, parseBackup, makeWord, classifyRows, gradeWord, todayQueue, weakWordQueue, wordsForDays } from './store.js';
+import './account.css';
+import './theme.css';
+import { loadState, saveState, syncInitialState, parseBackup, makeWord, classifyRows, gradeWord, todayQueue, weakWordQueue, wordsForDays, configureStore, flushPendingSaves, hasUnsavedChanges, getSyncStatus, getGuestState } from './store.js';
+import { renderShell, updateSyncStatus, escapeHtml as esc } from './layout.js';
+import { auth, getAuthSession } from './auth.js';
+import { showAccount, closeAccount } from './account-view.js';
 import { importSpreadsheet, importPdf } from './importers.js';
 import { rankEnglishVoices, speakEnglish } from './speech.js';
 import { gradeMeaningAnswer, meaningHint, representativeMeaning } from './meaning-answer.js';
@@ -33,20 +38,22 @@ let studySetupKind = 'today';
 let typingSetupScope = 'all';
 
 const app = document.querySelector('#app');
-const icons = { home: '⌂', words: 'Aa', mistakes: '!', import: '↥', stats: '↗', settings: '⚙' };
-const labels = { home: '오늘', words: '단어장', mistakes: '오답 단어장', import: '가져오기', stats: '기록', settings: '설정' };
-
-function esc(value = '') {
-  return String(value).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
+let currentUser = null, activeUserId, accountEpoch = 0, syncInProgress = null;
 
 function persist() { saveState(state); }
 function pronounce(text) { return speakEnglish(text, globalThis.speechSynthesis, globalThis.SpeechSynthesisUtterance, { voiceName: state.settings.speechVoice || '', rate: state.settings.speechRate || 0.82 }); }
 
 function shell(content) {
-  const nav = Object.keys(labels).map((key) => `<button data-route="${key}" class="nav-item ${route === key ? 'active' : ''}"><span>${icons[key]}</span>${labels[key]}</button>`).join('');
-  app.innerHTML = `<aside><div class="brand"><b>W</b><div>WORD<br><span>GARDEN</span></div></div><nav>${nav}</nav><p class="aside-note">매일 조금씩,<br>기억은 오래도록.</p></aside><main>${content}</main><button class="mobile-add" data-route="import">＋</button>`;
-  app.querySelectorAll('[data-route]').forEach((el) => el.addEventListener('click', () => { route = el.dataset.route; render(); }));
+  const guest = getGuestState();
+  renderShell({ app, route, content, user: currentUser, status: getSyncStatus(),
+    onRoute: next => { route = next; render(); }, onAccount: handleAccount,
+    onRetry: () => reloadAccount(false), onReload: () => reloadAccount(true),
+    canImportGuest: Boolean(currentUser && !state.words.length && !state.sessions.length && (guest.words.length || guest.sessions.length)),
+    onImportGuest: () => {
+      if (!confirm('이 기기에 저장된 이전 학습 데이터를 현재 계정으로 가져올까요? 기존 기기 백업은 그대로 남습니다.')) return;
+      state = parseBackup(JSON.stringify(getGuestState())); persist(); render();
+    },
+  });
 }
 
 function home() {
@@ -55,10 +62,10 @@ function home() {
   const learned = state.words.filter((w) => w.status !== 'new').length;
   const accuracy = state.sessions.length ? Math.round(state.sessions.reduce((a, s) => a + s.correct, 0) / Math.max(1, state.sessions.reduce((a, s) => a + s.total, 0)) * 100) : 0;
   shell(`<header><div><p class="eyebrow">GOOD TO SEE YOU</p><h1>오늘도 단어를<br><em>기억</em>해 볼까요?</h1><p class="sub">외우는 것보다 중요한 건, 잊기 전에 다시 만나는 것.</p></div><div class="date">${new Intl.DateTimeFormat('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date())}</div></header>
-    <section class="hero-card"><div><span class="tag">TODAY'S SESSION</span><h2>${due.length ? `${due.length}개의 단어가 기다리고 있어요` : '오늘 복습을 모두 마쳤어요'}</h2><p>복습 ${due.filter(w => w.status !== 'new').length}개 · 새 단어 ${due.filter(w => w.status === 'new').length}개</p></div><button class="primary" id="start" ${due.length ? '' : 'disabled'}>학습 시작하기 →</button></section>
+    <section class="hero-card"><div><span class="tag">TODAY'S SESSION</span><h2>${!state.words.length ? '첫 단어를 추가해 보세요' : due.length ? `${due.length}개의 단어가 기다리고 있어요` : '오늘 복습을 모두 마쳤어요'}</h2><p>${!state.words.length ? '직접 입력하거나 파일에서 단어장을 가져올 수 있어요.' : `복습 ${due.filter(w => w.status !== 'new').length}개 · 새 단어 ${due.filter(w => w.status === 'new').length}개`}</p></div><button class="primary" id="start" ${state.words.length && !due.length ? 'disabled' : ''}>${!state.words.length ? '단어 추가하기' : '학습 시작하기'}</button></section>
     <section class="metrics"><article><span>전체 단어</span><strong>${state.words.length}</strong><small>WORDS</small></article><article><span>학습한 단어</span><strong>${learned}</strong><small>LEARNED</small></article><article><span>누적 정답률</span><strong>${accuracy}%</strong><small>ACCURACY</small></article></section>
     <section class="split"><article class="panel"><div class="panel-head"><h3>빠른 시작</h3></div><button class="quick" data-action="typing" ${state.words.length ? '' : 'disabled'}><b>⌨</b><span><strong>타이핑 학습</strong><small>한글 뜻 또는 영어 단어 직접 입력</small></span><i>→</i></button><button class="quick" data-action="weak" ${weak.length ? '' : 'disabled'}><b>↻</b><span><strong>틀린 단어 복습</strong><small>${weak.length ? `${weak.length}개의 약점 단어만 공부` : '현재 복습할 틀린 단어가 없어요'}</small></span><i>→</i></button><button class="quick" data-route="import"><b>↥</b><span><strong>단어장 가져오기</strong><small>Excel, CSV, PDF, 스캔 PDF</small></span><i>→</i></button><button class="quick" data-action="manual"><b>＋</b><span><strong>단어 직접 추가</strong><small>단어와 뜻을 바로 등록</small></span><i>→</i></button></article><article class="quote"><span>“</span><p>Success is the sum of small efforts, repeated day in and day out.</p><small>— ROBERT COLLIER</small></article></section>`);
-  app.querySelector('#start')?.addEventListener('click', () => openStudySetup('today'));
+  app.querySelector('#start')?.addEventListener('click', () => state.words.length ? openStudySetup('today') : showManual());
   app.querySelector('[data-action="weak"]')?.addEventListener('click', () => openStudySetup('weak'));
   app.querySelector('[data-action="typing"]')?.addEventListener('click', () => openTypingSetup('all'));
   app.querySelector('[data-action="manual"]')?.addEventListener('click', showManual);
@@ -73,7 +80,7 @@ function words(showForm = false) {
   shell(`<div class="page-head"><div><p class="eyebrow">MY COLLECTION</p><h1>나의 단어장</h1></div><button class="primary" id="add-word">＋ 단어 추가</button></div>
     <div id="manual-slot">${showForm ? manualForm() : ''}</div>
     <section class="panel table-panel"><div class="panel-head"><h3>전체 ${state.words.length}개</h3><input id="search" placeholder="단어 또는 뜻 검색" /></div><div id="word-list">${wordList(state.words)}</div></section>
-    ${state.imports.length ? `<section class="panel import-history"><h3>최근 가져오기</h3>${state.imports.slice().reverse().map(item => `<div><span><b>${esc(item.name)}</b><small>${new Date(item.createdAt).toLocaleString('ko-KR')} · ${item.count}개</small></span><button class="secondary" data-undo-import="${item.id}">되돌리기</button></div>`).join('')}</section>` : ''}`);
+    ${state.imports.length ? `<section class="panel import-history"><h3>최근 가져오기</h3>${state.imports.slice().reverse().map(item => `<div><span><b>${esc(item.name)}</b><small>${new Date(item.createdAt).toLocaleString('ko-KR')} · ${item.count}개</small></span><button class="secondary" data-undo-import="${esc(item.id)}">되돌리기</button></div>`).join('')}</section>` : ''}`);
   app.querySelector('#add-word').addEventListener('click', () => { app.querySelector('#manual-slot').innerHTML = manualForm(); bindManual(); });
   if (showForm) bindManual();
   app.querySelector('#search').addEventListener('input', (e) => { const q = e.target.value.toLowerCase(); app.querySelector('#word-list').innerHTML = wordList(state.words.filter(w => `${w.english} ${w.meaning}`.toLowerCase().includes(q))); });
@@ -86,15 +93,15 @@ function words(showForm = false) {
   }));
 }
 
-function manualForm() { return `<form class="panel manual" id="manual"><input name="english" placeholder="영어 단어·숙어" required><input name="meaning" placeholder="한국어 뜻" required><input name="partOfSpeech" placeholder="품사 (선택)"><input name="example" placeholder="예문 (선택)"><button class="primary">저장</button></form>`; }
+function manualForm() { return `<form class="panel manual" id="manual"><input name="english" aria-label="영어 단어·숙어" placeholder="영어 단어·숙어" required><input name="meaning" aria-label="한국어 뜻" placeholder="한국어 뜻" required><input name="partOfSpeech" aria-label="품사" placeholder="품사 (선택)"><input name="example" aria-label="예문" placeholder="예문 (선택)"><button class="primary">저장</button></form>`; }
 function bindManual() { app.querySelector('#manual')?.addEventListener('submit', (e) => { e.preventDefault(); const row = Object.fromEntries(new FormData(e.target)); state.words.push(makeWord(row, { type: 'manual', label: '직접 입력' })); pronounce(row.english); persist(); words(); }); }
-function wordList(list) { return list.length ? `<div class="word-table">${list.map(w => `<div><b>${esc(w.english)}</b><span>${esc(w.meaning)}</span><small>${esc([w.day ? `Day ${w.day}` : '', w.partOfSpeech, w.source?.label, w.source?.location].filter(Boolean).join(' · '))}</small><span class="word-actions"><button data-speak="${w.id}" aria-label="${esc(w.english)} 발음 듣기" title="발음 듣기">🔊</button><button data-delete="${w.id}" aria-label="삭제" title="삭제">×</button></span></div>`).join('')}</div>` : `<div class="empty"><b>아직 단어가 없어요</b><p>직접 추가하거나 파일에서 가져와 보세요.</p></div>`; }
+function wordList(list) { return list.length ? `<div class="word-table">${list.map(w => `<div><b>${esc(w.english)}</b><span>${esc(w.meaning)}</span><small>${esc([w.day ? `Day ${w.day}` : '', w.partOfSpeech, w.source?.label, w.source?.location].filter(Boolean).join(' · '))}</small><span class="word-actions"><button data-speak="${esc(w.id)}" aria-label="${esc(w.english)} 발음 듣기" title="발음 듣기">🔊</button><button data-delete="${esc(w.id)}" aria-label="삭제" title="삭제">×</button></span></div>`).join('')}</div>` : `<div class="empty"><b>아직 단어가 없어요</b><p>직접 추가하거나 파일에서 가져와 보세요.</p></div>`; }
 function bindDeletes() { app.querySelectorAll('[data-speak]').forEach(btn => btn.addEventListener('click', () => { const word = state.words.find(w => w.id === btn.dataset.speak); if (word) pronounce(word.english); })); app.querySelectorAll('[data-delete]').forEach(btn => btn.addEventListener('click', () => { state.words = state.words.filter(w => w.id !== btn.dataset.delete); persist(); words(); })); }
 
 function mistakes() {
   const weak = weakWordQueue(state);
   const days = [...new Set(weak.map(word => word.day).filter(Boolean))].sort((a, b) => a - b);
-  shell(`<div class="page-head mistake-head"><div><p class="eyebrow">WRONG ANSWER NOTE</p><h1>오답 단어장</h1><p class="sub">아직 해결하지 못한 단어만 모았습니다. 맞힌 횟수가 오답 횟수와 같아지면 자동으로 빠집니다.</p></div><div class="mistake-actions"><button class="secondary" id="mistake-typing" ${weak.length ? '' : 'disabled'}>뜻 타이핑 복습</button><button class="primary" id="mistake-cards" ${weak.length ? '' : 'disabled'}>오답 카드 학습 →</button></div></div>${weak.length ? `<section class="panel mistake-book"><div class="mistake-toolbar"><strong>전체 ${weak.length}개</strong><select id="mistake-day"><option value="">전체 Day</option>${days.map(day => `<option value="${day}">Day ${day}</option>`).join('')}</select><input id="mistake-search" placeholder="단어 또는 뜻 검색"></div><div id="mistake-list">${mistakeList(weak)}</div></section>` : `<section class="panel empty mistake-empty"><b>현재 오답 단어가 없어요</b><p>학습 중 틀린 단어가 생기면 이곳에 자동으로 모입니다.</p><button class="primary" data-route="home">오늘 학습 시작하기</button></section>`}`);
+  shell(`<div class="page-head mistake-head"><div><p class="eyebrow">WRONG ANSWER NOTE</p><h1>오답 단어장</h1><p class="sub">아직 해결하지 못한 단어만 모았습니다. 맞힌 횟수가 오답 횟수와 같아지면 자동으로 빠집니다.</p></div><div class="mistake-actions"><button class="secondary" id="mistake-typing" ${weak.length ? '' : 'disabled'}>뜻 타이핑 복습</button><button class="primary" id="mistake-cards" ${weak.length ? '' : 'disabled'}>오답 카드 학습</button></div></div>${weak.length ? `<section class="panel mistake-book"><div class="mistake-toolbar"><strong>전체 ${weak.length}개</strong><select id="mistake-day"><option value="">전체 Day</option>${days.map(day => `<option value="${day}">Day ${day}</option>`).join('')}</select><input id="mistake-search" placeholder="단어 또는 뜻 검색"></div><div id="mistake-list">${mistakeList(weak)}</div></section>` : `<section class="panel empty mistake-empty"><b>현재 오답 단어가 없어요</b><p>학습 중 틀린 단어가 생기면 이곳에 자동으로 모입니다.</p><button class="primary" data-route="home">오늘 학습 시작하기</button></section>`}`);
   app.querySelector('#mistake-cards')?.addEventListener('click', () => openStudySetup('weak'));
   app.querySelector('#mistake-typing')?.addEventListener('click', () => openTypingSetup('weak'));
   const update = () => {
@@ -110,7 +117,7 @@ function mistakes() {
 }
 
 function mistakeList(list) {
-  return list.length ? `<div class="mistake-table">${list.map(word => `<article><button class="mistake-speak" data-mistake-speak="${word.id}" aria-label="${esc(word.english)} 발음 듣기">🔊</button><div><b>${esc(word.english)}</b><small>${esc([word.day ? `Day ${word.day}` : '', word.partOfSpeech, word.number ? `No. ${word.number}` : ''].filter(Boolean).join(' · '))}</small></div><p>${esc(word.meaning)}</p><span><strong>${Math.max(1, (word.wrong || 0) - (word.correct || 0))}</strong><small>남은 오답</small><em>오답 ${word.wrong || 0} · 정답 ${word.correct || 0}</em></span></article>`).join('')}</div>` : '<div class="empty">조건에 맞는 오답 단어가 없어요.</div>';
+  return list.length ? `<div class="mistake-table">${list.map(word => `<article><button class="mistake-speak" data-mistake-speak="${esc(word.id)}" aria-label="${esc(word.english)} 발음 듣기">🔊</button><div><b>${esc(word.english)}</b><small>${esc([word.day ? `Day ${word.day}` : '', word.partOfSpeech, word.number ? `No. ${word.number}` : ''].filter(Boolean).join(' · '))}</small></div><p>${esc(word.meaning)}</p><span><strong>${Math.max(1, (word.wrong || 0) - (word.correct || 0))}</strong><small>남은 오답</small><em>오답 ${word.wrong || 0} · 정답 ${word.correct || 0}</em></span></article>`).join('')}</div>` : '<div class="empty">조건에 맞는 오답 단어가 없어요.</div>';
 }
 
 function bindMistakeAudio() { app.querySelectorAll('[data-mistake-speak]').forEach(button => button.addEventListener('click', () => { const word = state.words.find(item => item.id === button.dataset.mistakeSpeak); if (word) pronounce(word.english); })); }
@@ -130,11 +137,13 @@ function imports() {
 
 async function processFile(file) {
   if (!file) return;
+  const epoch = accountEpoch;
   pendingFile = file;
   const progress = app.querySelector('#progress');
   progress.textContent = `${file.name} 분석을 시작합니다…`;
   try {
     const rows = file.name.toLowerCase().endsWith('.pdf') ? await importPdf(file, (text) => { progress.textContent = text; }) : await importSpreadsheet(file);
+    if (epoch !== accountEpoch) return;
     pendingRows = classifyRows(rows, state.words);
     imports();
   } catch (error) {
@@ -184,7 +193,7 @@ function openStudySetup(kind = 'today') { studySetupKind = kind; route = 'study-
 function studySetup() {
   const source = studySetupKind === 'weak' ? weakWordQueue(state) : state.words;
   const title = studySetupKind === 'weak' ? '오답 복습 단원 선택' : '단어 학습 단원 선택';
-  shell(`<div class="page-head"><div><p class="eyebrow">SELECT DAYS</p><h1>${title}</h1><p class="sub">여러 Day를 동시에 선택할 수 있습니다.</p></div></div><section class="panel study-setup"><form id="study-setup-form"><div class="day-select-head"><strong>학습할 단원</strong><span><button type="button" class="text-btn" data-days="all">전체 선택</button><button type="button" class="text-btn" data-days="none">전체 해제</button></span></div><div class="day-choices">${dayChoices(source)}</div><label class="count-choice">문제 수<select name="count"><option value="10">10개</option><option value="20" selected>20개</option><option value="30">30개</option><option value="0">선택 단원 전체</option></select></label><button class="primary">선택한 단원 학습하기 →</button></form></section>`);
+  shell(`<div class="page-head"><div><p class="eyebrow">SELECT DAYS</p><h1>${title}</h1><p class="sub">여러 Day를 동시에 선택할 수 있습니다.</p></div></div><section class="panel study-setup"><form id="study-setup-form"><div class="day-select-head"><strong>학습할 단원</strong><span><button type="button" class="text-btn" data-days="all">전체 선택</button><button type="button" class="text-btn" data-days="none">전체 해제</button></span></div><div class="day-choices">${dayChoices(source)}</div><label class="count-choice">문제 수<select name="count"><option value="10">10개</option><option value="20" selected>20개</option><option value="30">30개</option><option value="0">선택 단원 전체</option></select></label><button class="primary">선택한 단원 학습하기</button></form></section>`);
   const form = app.querySelector('#study-setup-form');
   bindDayChoiceControls(form);
   form.addEventListener('submit', event => {
@@ -210,7 +219,7 @@ function openTypingSetup(scope = 'all') { typingSetupScope = scope; route = 'typ
 
 function typingSetup() {
   const source = typingSetupScope === 'weak' ? weakWordQueue(state) : state.words;
-  shell(`<div class="page-head"><div><p class="eyebrow">ACTIVE RECALL</p><h1>타이핑 학습 설정</h1><p class="sub">여러 단원과 문제 방향을 함께 선택하세요.</p></div></div><section class="panel typing-setup"><form id="typing-setup-form"><label>문제 방향<select name="direction"><option value="meaning">영어 → 한글 뜻 입력</option><option value="spelling">한글 뜻 → 영어 단어 입력</option><option value="copy-meaning">영어＋한글 뜻 → 한글 따라 치기</option></select></label><label>학습 범위<select name="scope"><option value="all" ${typingSetupScope === 'all' ? 'selected' : ''}>전체 단어</option><option value="due">오늘 학습할 단어</option><option value="weak" ${typingSetupScope === 'weak' ? 'selected' : ''}>틀린 단어만</option></select></label><label>문제 수<select name="count"><option value="10">10개</option><option value="20" selected>20개</option><option value="30">30개</option><option value="0">선택 단원 전체</option></select></label><div class="day-select-block"><div class="day-select-head"><strong>Day 다중 선택</strong><span><button type="button" class="text-btn" data-days="all">전체 선택</button><button type="button" class="text-btn" data-days="none">전체 해제</button></span></div><div class="day-choices">${dayChoices(source)}</div></div><button class="primary">학습 시작하기 →</button></form><p class="setup-note">Day 7·8·9처럼 원하는 단원을 여러 개 선택할 수 있습니다.</p></section>`);
+  shell(`<div class="page-head"><div><p class="eyebrow">ACTIVE RECALL</p><h1>타이핑 학습 설정</h1><p class="sub">여러 단원과 문제 방향을 함께 선택하세요.</p></div></div><section class="panel typing-setup"><form id="typing-setup-form"><label>문제 방향<select name="direction"><option value="meaning">영어 한글 뜻 입력</option><option value="spelling">한글 뜻 영어 단어 입력</option><option value="copy-meaning">영어＋한글 뜻 한글 따라 치기</option></select></label><label>학습 범위<select name="scope"><option value="all" ${typingSetupScope === 'all' ? 'selected' : ''}>전체 단어</option><option value="due">오늘 학습할 단어</option><option value="weak" ${typingSetupScope === 'weak' ? 'selected' : ''}>틀린 단어만</option></select></label><label>문제 수<select name="count"><option value="10">10개</option><option value="20" selected>20개</option><option value="30">30개</option><option value="0">선택 단원 전체</option></select></label><div class="day-select-block"><div class="day-select-head"><strong>Day 다중 선택</strong><span><button type="button" class="text-btn" data-days="all">전체 선택</button><button type="button" class="text-btn" data-days="none">전체 해제</button></span></div><div class="day-choices">${dayChoices(source)}</div></div><button class="primary">학습 시작하기</button></form><p class="setup-note">Day 7·8·9처럼 원하는 단원을 여러 개 선택할 수 있습니다.</p></section>`);
   const form = app.querySelector('#typing-setup-form');
   bindDayChoiceControls(form);
   form.addEventListener('submit', event => {
@@ -240,7 +249,7 @@ function startTypingStudy({ direction = 'meaning', scope = 'all', days = [], cou
 function typingPreviewPage() {
   const word = typingPreview[typingPreviewIndex];
   if (!word) { route = 'typing'; typingStartedAt = Date.now(); render(); return; }
-  shell(`<div class="study-top"><button class="text-btn" data-route="home">← 나가기</button><span>새 단어 미리 보기 ${typingPreviewIndex + 1} / ${typingPreview.length}</span></div><div class="study-progress"><i style="width:${((typingPreviewIndex + 1) / typingPreview.length) * 100}%"></i></div><section class="flashcard preview-card"><span class="tag">PREVIEW NEW WORD</span><p>${esc(word.partOfSpeech)}</p><div class="study-word"><h1>${esc(word.english)}</h1><button id="speak-preview" class="speak-button" aria-label="발음 듣기">🔊</button></div><div class="answer"><strong>${esc(representativeMeaning(word.meaning))}</strong></div><button class="primary preview-next" id="preview-next">${typingPreviewIndex + 1 === typingPreview.length ? '문제 풀기' : '다음 단어'} →</button></section>`);
+  shell(`<div class="study-top"><button class="text-btn" data-route="home">← 나가기</button><span>새 단어 미리 보기 ${typingPreviewIndex + 1} / ${typingPreview.length}</span></div><div class="study-progress"><i style="width:${((typingPreviewIndex + 1) / typingPreview.length) * 100}%"></i></div><section class="flashcard preview-card"><span class="tag">PREVIEW NEW WORD</span><p>${esc(word.partOfSpeech)}</p><div class="study-word"><h1>${esc(word.english)}</h1><button id="speak-preview" class="speak-button" aria-label="발음 듣기">🔊</button></div><div class="answer"><strong>${esc(representativeMeaning(word.meaning))}</strong></div><button class="primary preview-next" id="preview-next">${typingPreviewIndex + 1 === typingPreview.length ? '문제 풀기' : '다음 단어'}</button></section>`);
   app.querySelector('#speak-preview').addEventListener('click', () => pronounce(word.english)); pronounce(word.english);
   app.querySelector('#preview-next').addEventListener('click', () => { typingPreviewIndex += 1; typingPreviewPage(); });
 }
@@ -266,7 +275,7 @@ function typing() {
   const expected = spelling ? word.english : copyMode ? word.meaning : conciseMeaning;
   const distanceNote = spelling && typingFeedback && !typingFeedback.correct && typingFeedback.input ? `<p class="spelling-distance">철자 차이: ${typingFeedback.distance}글자</p>` : '';
   const accuracyNote = copyMode && typingFeedback ? `<p class="copy-accuracy-result">입력 정확도: ${typingFeedback.accuracy}%</p>` : '';
-  const feedback = typingFeedback ? `<div class="typing-feedback ${typingFeedback.correct ? 'correct-box' : 'wrong-box'}"><b>${typingFeedback.correct ? '정확하게 입력했어요!' : '다른 글자가 있어요'}</b><p>입력: ${esc(typingFeedback.input || '(입력 없음)')}</p><p>정답: ${esc(expected)}</p>${distanceNote}${accuracyNote}${typingFeedback.correct || spelling || copyMode ? '' : '<button class="secondary" id="accept-answer">내 답도 정답으로 인정</button>'}<button class="primary" id="typing-next">${typingIndex + 1 === typingQueue.length ? '결과 보기' : '다음 단어'} →</button><small>${(typingFeedback.responseMs / 1000).toFixed(1)}초${copyMode ? '' : ` · 힌트 ${typingFeedback.hints}단계 사용`}</small></div>` : '';
+  const feedback = typingFeedback ? `<div class="typing-feedback ${typingFeedback.correct ? 'correct-box' : 'wrong-box'}"><b>${typingFeedback.correct ? '정확하게 입력했어요!' : '다른 글자가 있어요'}</b><p>입력: ${esc(typingFeedback.input || '(입력 없음)')}</p><p>정답: ${esc(expected)}</p>${distanceNote}${accuracyNote}${typingFeedback.correct || spelling || copyMode ? '' : '<button class="secondary" id="accept-answer">내 답도 정답으로 인정</button>'}<button class="primary" id="typing-next">${typingIndex + 1 === typingQueue.length ? '결과 보기' : '다음 단어'}</button><small>${(typingFeedback.responseMs / 1000).toFixed(1)}초${copyMode ? '' : ` · 힌트 ${typingFeedback.hints}단계 사용`}</small></div>` : '';
   const hintValue = spelling ? englishHint(word.english, typingHintLevel) : meaningHint(conciseMeaning, typingHintLevel);
   const hint = typingHintLevel ? `<p class="hint-output">힌트 ${typingHintLevel}: ${esc(hintValue)}</p>` : '';
   const prompt = spelling ? `<div class="meaning-prompt"><h2>${esc(conciseMeaning)}</h2><p>${esc(word.partOfSpeech)}</p></div>` : copyMode ? `<p>${esc(word.partOfSpeech)}</p><div class="study-word"><h1>${esc(word.english)}</h1><button id="speak-typing" class="speak-button" aria-label="발음 다시 듣기">🔊</button></div><div class="copy-target">${esc(word.meaning)}</div>` : `<p>${esc(word.partOfSpeech)}</p><div class="study-word"><h1>${esc(word.english)}</h1><button id="speak-typing" class="speak-button" aria-label="발음 다시 듣기">🔊</button></div>`;
@@ -347,19 +356,60 @@ function settings() {
   app.querySelector('#test-voice').addEventListener('click', () => { const data = Object.fromEntries(new FormData(form)); speakEnglish('comfortable pronunciation', globalThis.speechSynthesis, globalThis.SpeechSynthesisUtterance, { voiceName: data.speechVoice, rate: +data.speechRate }); });
   form.addEventListener('submit', e => { e.preventDefault(); const data = Object.fromEntries(new FormData(e.target)); state.settings = { dailyNew: +data.dailyNew, dailyReview: +data.dailyReview, speechVoice: data.speechVoice, speechRate: +data.speechRate }; persist(); route='home'; render(); });
   app.querySelector('#export').addEventListener('click', () => { const blob = new Blob([JSON.stringify(state, null, 2)], {type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`word-garden-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(a.href); });
-  app.querySelector('#restore').addEventListener('change', async e => { try { state = parseBackup(await e.target.files[0].text()); persist(); render(); } catch (error) { alert(error.message); } });
+  app.querySelector('#restore').addEventListener('change', async e => { const epoch = accountEpoch; try { const restored = parseBackup(await e.target.files[0].text()); if (epoch !== accountEpoch) return; if (!confirm('현재 단어장과 학습 기록을 선택한 백업으로 바꿀까요?')) return; state = restored; persist(); render(); } catch (error) { alert(error.message); } });
 }
 
 function render() { ({ home, words, mistakes, import: imports, 'study-setup': studySetup, study, 'typing-setup': typingSetup, 'typing-preview': typingPreviewPage, typing, quiz, result, stats, settings }[route] || home)(); }
 
-async function bootstrap() {
-  render();
+async function handleAccount() {
+  if (!currentUser) { showAccount(); return; }
+  const saved = await flushPendingSaves();
+  if (!saved && !confirm('계정에 아직 저장하지 못한 변경 내용이 있습니다. 이 기기에 보관한 상태로 로그아웃할까요?')) return;
+  const { error } = await auth.signOut();
+  if (error) alert('로그아웃하지 못했습니다. 연결을 확인한 뒤 다시 시도해 주세요.');
+}
+
+async function reloadAccount(discardLocal) {
+  if (!currentUser || syncInProgress) return;
+  if (discardLocal && !confirm('먼저 설정에서 현재 데이터를 백업해 주세요. 이 기기의 변경 내용을 서버 데이터로 바꿀까요?')) return;
+  const epoch = accountEpoch;
+  syncInProgress = syncInitialState(state, { discardLocal });
   try {
-    state = await syncInitialState(state);
-    render();
+    const loaded = await syncInProgress;
+    if (epoch === accountEpoch) { state = loaded; render(); }
   } catch (error) {
-    console.error('서버 데이터를 불러오지 못해 브라우저 저장소를 사용합니다.', error);
+    if (error.name !== 'AbortError') console.error('계정 동기화를 완료하지 못했습니다.');
+  } finally { if (epoch === accountEpoch) syncInProgress = null; }
+}
+
+async function applySession(event, session) {
+  const id = session?.user?.id || null;
+  if (id !== activeUserId) closeAccount();
+  const recovery = event === 'PASSWORD_RECOVERY' || (session && new URLSearchParams(location.search).get('recovery') === '1');
+  if (recovery) {
+    const clean = new URL(location.href); clean.searchParams.delete('recovery'); history.replaceState(null, '', clean);
+    showAccount('recovery');
   }
+  if (id === activeUserId) return;
+  activeUserId = id; currentUser = session?.user || null; accountEpoch++;
+  configureStore(id, getAuthSession); syncInProgress = null;
+  state = loadState(); route = 'home'; pendingRows = []; pendingFile = null;
+  queue = []; sessionResults = []; quizQueue = []; typingQueue = []; typingPreview = [];
+  activeIndex = 0; quizIndex = 0; typingIndex = 0; typingPreviewIndex = 0;
+  typingAttempts = new Map(); typingFeedback = null; revealed = false; spokenStudyWordId = null;
+  globalThis.speechSynthesis?.cancel(); render();
+  await reloadAccount(false);
+}
+
+async function bootstrap() {
+  app.innerHTML = '<main><p role="status">학습 공간을 준비하고 있어요.</p></main>';
+  window.addEventListener('word-garden-sync', event => updateSyncStatus(app, event.detail));
+  window.addEventListener('online', () => { void reloadAccount(false); });
+  window.addEventListener('beforeunload', event => { if (hasUnsavedChanges()) { event.preventDefault(); event.returnValue = ''; } });
+  if (!auth) { await applySession('INITIAL_SESSION', null); return; }
+  auth.onAuthStateChange((event, session) => { setTimeout(() => { void applySession(event, session); }, 0); });
+  try { await applySession('INITIAL_SESSION', await getAuthSession()); }
+  catch { await applySession('SIGNED_OUT', null); }
 }
 
 bootstrap();
