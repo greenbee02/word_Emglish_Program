@@ -109,6 +109,7 @@ export function createSyncStore({ storage, apiBase = '', getSession = async () =
     localState = { ...localState, ...load() };
     const cachedMeta = meta();
     try {
+      notify('loading', '학습 데이터를 불러오는 중입니다.');
       const remote = await request('GET', undefined, epoch);
       if (epoch !== generation) throw new DOMException('Account changed', 'AbortError');
       if (initialRevision !== revision) {

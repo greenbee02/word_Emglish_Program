@@ -1,10 +1,13 @@
 import './style.css';
 import './account.css';
 import './theme.css';
+import './progress.css';
 import { loadState, saveState, syncInitialState, parseBackup, makeWord, classifyRows, gradeWord, todayQueue, weakWordQueue, wordsForDays, configureStore, flushPendingSaves, hasUnsavedChanges, getSyncStatus, getGuestState } from './store.js';
-import { renderShell, updateSyncStatus, escapeHtml as esc } from './layout.js';
+import { renderShell, updateSyncStatus, renderLoadingPanel, isInitialDataLoading, escapeHtml as esc } from './layout.js';
 import { auth, getAuthSession } from './auth.js';
 import { showAccount, closeAccount } from './account-view.js';
+import { renderSettingsContent } from './settings-view.js';
+import { mountProgressView } from './progress-view.js';
 import { importSpreadsheet, importPdf } from './importers.js';
 import { rankEnglishVoices, speakEnglish } from './speech.js';
 import { gradeMeaningAnswer, meaningHint, representativeMeaning } from './meaning-answer.js';
@@ -48,7 +51,7 @@ function shell(content) {
   renderShell({ app, route, content, user: currentUser, status: getSyncStatus(),
     onRoute: next => { route = next; render(); }, onAccount: handleAccount,
     onRetry: () => reloadAccount(false), onReload: () => reloadAccount(true),
-    canImportGuest: Boolean(currentUser && !state.words.length && !state.sessions.length && (guest.words.length || guest.sessions.length)),
+    canImportGuest: Boolean(currentUser && getSyncStatus().kind !== 'loading' && !state.words.length && !state.sessions.length && (guest.words.length || guest.sessions.length)),
     onImportGuest: () => {
       if (!confirm('이 기기에 저장된 이전 학습 데이터를 현재 계정으로 가져올까요? 기존 기기 백업은 그대로 남습니다.')) return;
       state = parseBackup(JSON.stringify(getGuestState())); persist(); render();
@@ -342,15 +345,16 @@ function saveSession() { const responseTimes = sessionResults.map(item => item.r
 function result() { const good = sessionResults.filter(r => r.correct ?? r.grade === 'good').length; const typingTitle = typingDirection === 'spelling' ? '영단어 타이핑 학습을 마쳤어요' : typingDirection === 'copy-meaning' ? '한글 뜻 따라 치기를 마쳤어요' : '뜻 타이핑 학습을 마쳤어요'; const title = sessionKind === 'weak' ? '틀린 단어 복습을 마쳤어요' : sessionKind === 'typing' ? typingTitle : '오늘의 학습을 마쳤어요'; const times = sessionResults.map(item => item.responseMs).filter(Number.isFinite); const average = times.length ? (times.reduce((sum, value) => sum + value, 0) / times.length / 1000).toFixed(1) : null; const accuracies = sessionResults.map(item => item.accuracy).filter(Number.isFinite); const copyAverage = accuracies.length ? Math.round(accuracies.reduce((sum, value) => sum + value, 0) / accuracies.length) : null; shell(`<section class="complete"><span>✓</span><p class="eyebrow">SESSION COMPLETE</p><h1>${title}</h1><p>${sessionResults.length}문제 중 ${good}개를 정확히 입력했습니다.${copyAverage !== null ? `<br>평균 입력 정확도 ${copyAverage}%` : ''}${average ? `<br>평균 응답 시간 ${average}초` : ''}${sessionKind === 'weak' ? `<br>남은 약점 단어 ${weakWordQueue(state).length}개` : ''}${quizQueue.length ? `<br>문장 퀴즈 ${quizQueue.length}개 중 ${quizCorrect}개 정답` : ''}</p><button class="primary" data-route="${sessionKind === 'weak' ? 'stats' : 'home'}">${sessionKind === 'weak' ? '학습 기록 보기' : '오늘로 돌아가기'}</button></section>`); }
 
 function stats() {
-  const recent = state.sessions.slice(-7).reverse(); const weak = weakWordQueue(state);
-  shell(`<div class="page-head"><div><p class="eyebrow">MY PROGRESS</p><h1>학습 기록</h1></div><button class="primary" id="study-weak" ${weak.length ? '' : 'disabled'}>${weak.length ? `틀린 단어 ${weak.length}개 복습하기` : '복습할 틀린 단어 없음'}</button></div><section class="metrics"><article><span>학습 세션</span><strong>${state.sessions.length}</strong><small>SESSIONS</small></article><article><span>누적 학습</span><strong>${state.sessions.reduce((a,s)=>a+s.total,0)}</strong><small>REVIEWS</small></article><article><span>약점 단어</span><strong>${weak.length}</strong><small>WEAK WORDS</small></article></section><section class="split"><article class="panel"><h3>최근 학습</h3>${recent.length ? recent.map(s=>`<div class="history"><span>${new Date(s.date).toLocaleDateString('ko-KR')}${s.type === 'weak' ? ' · 오답 복습' : s.type === 'typing' ? ` · ${s.direction === 'spelling' ? '영단어 타이핑' : s.direction === 'copy-meaning' ? '한글 따라 치기' : '뜻 타이핑'}` : ''}</span><b>${s.total}개</b><em>${Math.round(s.correct/Math.max(1,s.total)*100)}%</em></div>`).join('') : '<div class="empty">아직 학습 기록이 없어요.</div>'}</article><article class="panel"><h3>아직 해결하지 못한 단어</h3>${weak.length ? weak.map(w=>`<div class="history"><b>${esc(w.english)}</b><span>${esc(w.meaning)}</span><em>오답 ${w.wrong} · 정답 ${w.correct}</em></div>`).join('') : '<div class="empty">약점 단어가 없어요.</div>'}</article></section>`);
-  app.querySelector('#study-weak')?.addEventListener('click', () => openStudySetup('weak'));
+  shell('<div id="progress-root"></div>');
+  mountProgressView(app.querySelector('#progress-root'), {
+    sessions: state.sessions, weak: weakWordQueue(state),
+    onStudyWeak: () => openStudySetup('weak'),
+  });
 }
 
 function settings() {
   const voices = rankEnglishVoices(globalThis.speechSynthesis?.getVoices?.() || []);
-  const voiceOptions = voices.map(voice => `<option value="${esc(voice.name)}" ${voice.name === state.settings.speechVoice ? 'selected' : ''}>${esc(voice.name)} (${esc(voice.lang)})</option>`).join('');
-  shell(`<div class="page-head"><div><p class="eyebrow">PREFERENCES</p><h1>설정</h1></div></div><section class="panel settings"><form id="settings"><label>하루 새 단어 수<input name="dailyNew" type="number" min="1" max="100" value="${state.settings.dailyNew}"></label><label>하루 최대 복습 수<input name="dailyReview" type="number" min="1" max="300" value="${state.settings.dailyReview}"></label><label>영어 발음 음성<select name="speechVoice"><option value="">자동 선택 (고품질 우선)</option>${voiceOptions}</select></label><label>발음 속도<input name="speechRate" type="range" min="0.55" max="1.2" step="0.05" value="${state.settings.speechRate || 0.82}"><output id="rate-value">${Number(state.settings.speechRate || 0.82).toFixed(2)}×</output></label><button class="secondary" type="button" id="test-voice">예시 발음 듣기</button><button class="primary">설정 저장</button></form><hr><h3>데이터 백업</h3><p>모든 단어, 복습 일정과 기록을 JSON 파일로 보관할 수 있어요.</p><div class="actions"><button class="secondary" id="export">백업 내려받기</button><label class="secondary">백업 복원<input id="restore" type="file" accept=".json" hidden></label></div></section>`);
+  shell(renderSettingsContent(state.settings, voices));
   const form = app.querySelector('#settings');
   form.elements.speechRate.addEventListener('input', e => { app.querySelector('#rate-value').textContent = `${Number(e.target.value).toFixed(2)}×`; });
   app.querySelector('#test-voice').addEventListener('click', () => { const data = Object.fromEntries(new FormData(form)); speakEnglish('comfortable pronunciation', globalThis.speechSynthesis, globalThis.SpeechSynthesisUtterance, { voiceName: data.speechVoice, rate: +data.speechRate }); });
@@ -359,7 +363,10 @@ function settings() {
   app.querySelector('#restore').addEventListener('change', async e => { const epoch = accountEpoch; try { const restored = parseBackup(await e.target.files[0].text()); if (epoch !== accountEpoch) return; if (!confirm('현재 단어장과 학습 기록을 선택한 백업으로 바꿀까요?')) return; state = restored; persist(); render(); } catch (error) { alert(error.message); } });
 }
 
-function render() { ({ home, words, mistakes, import: imports, 'study-setup': studySetup, study, 'typing-setup': typingSetup, 'typing-preview': typingPreviewPage, typing, quiz, result, stats, settings }[route] || home)(); }
+function render() {
+  if (isInitialDataLoading(currentUser, getSyncStatus(), state)) { shell(renderLoadingPanel()); return; }
+  ({ home, words, mistakes, import: imports, 'study-setup': studySetup, study, 'typing-setup': typingSetup, 'typing-preview': typingPreviewPage, typing, quiz, result, stats, settings }[route] || home)();
+}
 
 async function handleAccount() {
   if (!currentUser) { showAccount(); return; }
@@ -402,8 +409,11 @@ async function applySession(event, session) {
 }
 
 async function bootstrap() {
-  app.innerHTML = '<main><p role="status">학습 공간을 준비하고 있어요.</p></main>';
-  window.addEventListener('word-garden-sync', event => updateSyncStatus(app, event.detail));
+  app.innerHTML = `<main aria-busy="true">${renderLoadingPanel('학습 공간을 준비하고 있어요')}</main>`;
+  window.addEventListener('word-garden-sync', event => {
+    updateSyncStatus(app, event.detail);
+    if (isInitialDataLoading(currentUser, event.detail, state) && !app.querySelector('.data-loading')) render();
+  });
   window.addEventListener('online', () => { void reloadAccount(false); });
   window.addEventListener('beforeunload', event => { if (hasUnsavedChanges()) { event.preventDefault(); event.returnValue = ''; } });
   if (!auth) { await applySession('INITIAL_SESSION', null); return; }

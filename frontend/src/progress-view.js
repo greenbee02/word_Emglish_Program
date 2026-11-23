@@ -1,0 +1,43 @@
+import { escapeHtml as esc } from './layout.js';
+import { accuracy, buildProgress, calendarMonth, shiftMonth } from './progress.js';
+
+const number = value => value.toLocaleString('ko-KR');
+const percent = value => value === null ? '—' : `${value}%`;
+const shortDate = key => `${Number(key.slice(5, 7))}/${Number(key.slice(8))}`;
+const fullDate = key => `${Number(key.slice(0, 4))}년 ${Number(key.slice(5, 7))}월 ${Number(key.slice(8))}일`;
+const sessionName = s => s.type === 'weak' ? '오답 복습' : s.type === 'typing' ? s.direction === 'spelling' ? '영단어 타이핑' : s.direction === 'copy-meaning' ? '한글 따라 치기' : '뜻 타이핑' : '단어 학습';
+
+export function mountProgressView(root, { sessions, weak, onStudyWeak, now = new Date() }) {
+  const model = buildProgress(sessions, now);
+  let month = model.today.slice(0, 7), range = 7, selected = model.today;
+  function render(focusKey) {
+    const series = model.series(range), max = Math.max(1, ...series.map(d => d.total));
+    const total = series.reduce((sum, d) => sum + d.total, 0), correct = series.reduce((sum, d) => sum + d.correct, 0);
+    const calendar = calendarMonth(month, model), monthDays = calendar.days.filter(d => d.total > 0);
+    const day = model.days.get(selected);
+    const streakTitle = { new: '첫 학습을 시작해 볼까요?', done: '오늘도 학습 완료!', pending: '오늘도 이어 가세요', broken: '다시 시작해도 괜찮아요' }[model.status];
+    const streakMessage = { new: '학습을 마치면 달력에 첫 번째 체크가 생겨요.', done: `${model.current}일째 꾸준히 기억을 쌓고 있어요.`, pending: `어제까지 ${model.current}일 연속 학습했어요. 오늘 학습하면 ${model.current + 1}일이 돼요.`, broken: `${fullDate(model.lastDay || model.today)} 이후 학습을 쉬어 연속 기록이 끊겼어요. 이전 기록은 ${model.previousRun}일이에요.` }[model.status];
+    const delta = model.weekTotal - model.previousWeek;
+    const comparison = !model.weekTotal && !model.previousWeek ? '이번 주 첫 기록을 만들어 보세요.' : !model.previousWeek ? `최근 7일 동안 ${number(model.weekTotal)}문제를 학습했어요.` : delta === 0 ? '이전 7일과 같은 학습량을 유지했어요.' : `이전 7일보다 ${number(Math.abs(delta))}문제 ${delta > 0 ? '더' : '덜'} 학습했어요.`;
+    root.innerHTML = `<div class="progress-page">
+      <div class="page-head"><div><p class="eyebrow">MY PROGRESS</p><h1>학습 기록</h1><p class="sub">조금씩 쌓인 학습, 한눈에 확인해요.</p></div><button class="primary" id="study-weak" ${weak.length ? '' : 'disabled'}>${weak.length ? `틀린 단어 ${number(weak.length)}개 복습하기` : '복습할 틀린 단어 없음'}</button></div>
+      <section class="streak-banner ${model.status === 'broken' ? 'streak-paused' : ''}" aria-label="연속 학습 현황"><div class="streak-count"><span>현재 연속 학습</span><strong>${model.current}<small>일</small></strong></div><div class="streak-copy"><span class="streak-badge">${{new:'시작 전',done:'오늘 학습 완료',pending:'오늘 학습 대기',broken:'연속 학습 중단'}[model.status]}</span><h2>${streakTitle}</h2><p>${streakMessage}</p></div><div class="streak-best"><span>최장 연속 학습</span><strong>${model.longest}<small>일</small></strong></div></section>
+      <section class="metrics progress-metrics" aria-label="누적 학습 요약"><article><span>누적 학습량</span><strong>${number(model.total)}</strong><small>문제 · 반복 학습 포함</small></article><article><span>누적 정답률</span><strong>${percent(model.accuracy)}</strong><small>${number(model.correct)} / ${number(model.total)}문제 정답</small></article><article><span>학습한 날짜</span><strong>${number(model.days.size)}<small>일</small></strong><small>완료한 학습 ${number(model.sessions.length)}회</small></article></section>
+      <div class="progress-grid"><section class="panel trend-panel" aria-labelledby="trend-title"><div class="progress-panel-head"><div><h2 id="trend-title">학습량 추이</h2><p>매일 얼마나 학습했는지 살펴보세요.</p></div><div class="range-switch" role="group" aria-label="그래프 기간">${[7,30].map(n => `<button data-range="${n}" data-focus="range-${n}" aria-pressed="${n === range}">${n}일</button>`).join('')}</div></div><div class="trend-summary"><strong>${number(total)}<small>문제</small></strong><span>최근 ${range}일 정답률 <b>${percent(accuracy(correct,total))}</b></span></div>
+        <div class="study-chart ${range === 30 ? 'chart-month' : ''}" role="list" aria-label="최근 ${range}일 날짜별 학습량">${series.map((d,i) => `<div class="chart-column" role="listitem" title="${shortDate(d.key)} · ${number(d.total)}문제 · 정답 ${number(d.correct)}문제" aria-label="${fullDate(d.key)}: 학습 ${d.total}문제, ${d.total ? `정답률 ${percent(accuracy(d.correct,d.total))}` : '학습 기록 없음'}"><span class="chart-value" aria-hidden="true">${range === 7 && d.total ? number(d.total) : ''}</span><div class="chart-track" aria-hidden="true"><div class="chart-bar ${d.key === model.today ? 'is-today' : ''}" style="height:${d.total / max * 100}%"><i style="height:${d.correct / Math.max(1,d.total) * 100}%"></i></div></div><span class="chart-date" aria-hidden="true">${range === 7 || i === 0 || i === range - 1 || (i % 7 === 0 && i < range - 4) ? shortDate(d.key) : ''}</span></div>`).join('')}</div>
+        <div class="chart-legend"><span><i class="legend-total"></i>학습량</span><span><i class="legend-correct"></i>정답</span><span>단위: 문제</span></div>${total ? '' : '<p class="chart-empty">학습을 마치면 이곳에 그래프가 채워져요.</p>'}<div class="progress-insight"><b>최근 7일, ${model.weekDays}일 학습했어요.</b><p>${comparison}</p></div></section>
+      <section class="panel calendar-panel" aria-labelledby="calendar-title"><div class="progress-panel-head"><div><h2 id="calendar-title">학습 캘린더</h2><p>체크가 있는 날은 학습을 마친 날이에요.</p></div></div><div class="calendar-toolbar"><h3 aria-live="polite">${calendar.label}</h3><div><button class="calendar-nav" data-month="-1" data-focus="prev-month" aria-label="이전 달">‹</button><button class="calendar-current" data-month="today" data-focus="this-month">이번 달</button><button class="calendar-nav" data-month="1" data-focus="next-month" aria-label="다음 달" ${month >= model.today.slice(0,7) ? 'disabled' : ''}>›</button></div></div><div class="calendar-week" aria-hidden="true">${['일','월','화','수','목','금','토'].map(d=>`<span>${d}</span>`).join('')}</div><div class="calendar-days" role="group" aria-label="${calendar.label} 학습 날짜">${'<span class="calendar-blank" aria-hidden="true"></span>'.repeat(calendar.leading)}${calendar.days.map(d=>`<button class="calendar-day ${d.total ? 'has-study' : ''} ${d.key === model.today ? 'is-today' : ''}" data-day="${d.key}" data-focus="day-${d.key}" aria-pressed="${selected === d.key}" ${d.key === model.today ? 'aria-current="date"' : ''} aria-label="${fullDate(d.key)}${d.key === model.today ? ', 오늘' : ''}, ${d.future ? '아직 오지 않은 날' : d.total ? `학습 완료, ${d.total}문제` : '학습 기록 없음'}" ${d.future ? 'disabled' : ''}><span>${d.day}</span><small aria-hidden="true">${d.total ? '✓' : ''}</small></button>`).join('')}</div><div class="calendar-legend"><span><i>✓</i>학습 완료</span><span>학습한 날 ${monthDays.length}일</span></div><div class="calendar-detail" role="status" aria-live="polite"><b>${fullDate(selected)}</b><p>${day ? `학습 ${number(day.total)}문제 · 정답률 ${percent(accuracy(day.correct,day.total))} · ${day.sessions}회 완료` : '이 날짜에는 완료한 학습이 없어요.'}</p></div></section></div>
+      <p class="progress-note">학습을 끝내고 저장된 기록을 기기의 날짜 기준으로 집계해요. 오늘 학습 전에는 어제까지의 연속 기록이 유지돼요.</p>
+      <section class="split progress-history"><article class="panel"><h3>최근 학습</h3>${model.sessions.length ? model.sessions.slice(0,7).map(s=>`<div class="history"><span>${esc(new Date(s.date).toLocaleDateString('ko-KR'))}<small>${sessionName(s)}</small></span><b>${number(s.total)}문제</b><em>${percent(accuracy(s.correct,s.total))}</em></div>`).join('') : '<div class="empty">아직 학습 기록이 없어요.<br>첫 학습을 마치고 변화를 확인해 보세요.</div>'}</article><article class="panel"><h3>아직 해결하지 못한 단어</h3>${weak.length ? weak.map(w=>`<div class="history"><b>${esc(w.english)}</b><span>${esc(w.meaning)}</span><em>오답 ${esc(w.wrong)} · 정답 ${esc(w.correct)}</em></div>`).join('') : '<div class="empty">약점 단어가 없어요.</div>'}</article></section></div>`;
+    root.querySelector('#study-weak').addEventListener('click', onStudyWeak);
+    root.querySelectorAll('[data-range]').forEach(button => button.addEventListener('click', () => { range = Number(button.dataset.range); render(button.dataset.focus); }));
+    root.querySelectorAll('[data-month]').forEach(button => button.addEventListener('click', () => {
+      month = button.dataset.month === 'today' ? model.today.slice(0,7) : shiftMonth(month, Number(button.dataset.month));
+      selected = month === model.today.slice(0,7) ? model.today : `${month}-01`;
+      render(button.dataset.focus);
+    }));
+    root.querySelectorAll('[data-day]').forEach(button => button.addEventListener('click', () => { selected = button.dataset.day; render(button.dataset.focus); }));
+    if (focusKey) root.querySelector(`[data-focus="${focusKey}"]:not(:disabled)`)?.focus({ preventScroll: true });
+  }
+  render();
+}

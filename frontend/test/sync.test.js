@@ -144,3 +144,20 @@ test('logout reports cached unsaved edits when initial server loading failed', a
   const reopened = createSyncStore(options); reopened.setUser('a'); await reopened.sync(reopened.load());
   assert.equal(await reopened.flush(), false); assert.equal(reopened.isDirty(), true);
 });
+
+test('each server reload reports loading until completion and stops loading on failure', async () => {
+  let calls = 0, complete;
+  const store = createSyncStore({ storage: memory(), apiBase: '/server', getSession: async () => ({ user: { id: 'a' }, access_token: 'token' }), fetchImpl: async () => {
+    calls++;
+    if (calls === 1) return Response.json({ state: state('remote'), version: 1 });
+    if (calls === 2) return new Promise(resolve => { complete = () => resolve(Response.json({ state: state('updated'), version: 2 })); });
+    throw new Error('offline');
+  } });
+  store.setUser('a'); await store.sync({}); assert.equal(store.getStatus().kind, 'saved');
+  const loading = store.sync(store.load());
+  assert.equal(store.getStatus().kind, 'loading');
+  await new Promise(resolve => setImmediate(resolve));
+  complete(); assert.deepEqual(await loading, state('updated'));
+  assert.equal(store.getStatus().kind, 'saved');
+  await store.sync(store.load()); assert.equal(store.getStatus().kind, 'offline');
+});
