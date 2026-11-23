@@ -1,0 +1,6 @@
+import { escapeHtml as esc } from './layout.js';
+
+export function renderSettingsContent(settings, voices = []) {
+  const voiceOptions = voices.map(voice => `<option value="${esc(voice.name)}" ${voice.name === settings.speechVoice ? 'selected' : ''}>${esc(voice.name)} (${esc(voice.lang)})</option>`).join('');
+  return `<div class="page-head"><div><p class="eyebrow">PREFERENCES</p><h1>설정</h1></div></div><section class="panel settings"><form id="settings"><label>하루 새 단어 수<input name="dailyNew" type="number" min="1" max="100" value="${settings.dailyNew}"></label><label>하루 최대 복습 수<input name="dailyReview" type="number" min="1" max="300" value="${settings.dailyReview}"></label><label>영어 발음 음성<select name="speechVoice"><option value="">자동 선택 (고품질 우선)</option>${voiceOptions}</select></label><label>발음 속도<input name="speechRate" type="range" min="0.55" max="1.2" step="0.05" value="${settings.speechRate || 0.82}"><output id="rate-value">${Number(settings.speechRate || 0.82).toFixed(2)}×</output></label><button class="secondary" type="button" id="test-voice">예시 발음 듣기</button><button class="primary">설정 저장</button></form><hr><h3>데이터 백업</h3><p>모든 단어, 복습 일정과 기록을 JSON 파일로 보관할 수 있어요.</p><div class="actions"><button class="secondary" id="export">백업 내려받기</button><label class="secondary">백업 복원<input id="restore" type="file" accept=".json" hidden></label></div></section>`;
+}
